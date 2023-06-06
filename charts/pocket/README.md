@@ -45,6 +45,7 @@ privateKeySecretKeyRef:
 | config.consensus.private_key | string | `""` |  |
 | config.logger.format | string | `"json"` |  |
 | config.logger.level | string | `"debug"` |  |
+| config.p2p.disable_raintree | bool | `true` |  |
 | config.p2p.hostname | string | `""` |  |
 | config.p2p.is_empty_connection_type | bool | `false` |  |
 | config.p2p.max_mempool_count | int | `100000` |  |

@@ -42,6 +42,8 @@ type PersistenceModule interface {
 // TreeStore defines the interface for atomic updates and rollbacks to the internal
 // merkle trees that compose the state hash of pocket.
 type TreeStore interface {
+	Module
+
 	// Update returns the new state hash for a given height.
 	// * Height is passed through to the Update function and is used to query the TxIndexer for transactions
 	// to update into the merkle tree set

@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	pocketLogger "github.com/pokt-network/pocket/logger"
 	"github.com/pokt-network/pocket/persistence/indexer"
 	"github.com/pokt-network/pocket/persistence/kvstore"
 	"github.com/pokt-network/pocket/persistence/sql"
@@ -22,6 +23,9 @@ import (
 	"github.com/pokt-network/pocket/shared/modules/base_modules"
 	"github.com/pokt-network/smt"
 )
+
+// declare a logger for use by the tree store
+var logger = pocketLogger.Global.CreateLoggerForModule(modules.TreeStoreModuleName)
 
 var merkleTreeToString = map[merkleTree]string{
 	appMerkleTree:      "app",
@@ -129,7 +133,7 @@ func (t *treeStore) updateMerkleTrees(pgtx pgx.Tx, txi indexer.TxIndexer, height
 
 			actors, err := sql.GetActors(pgtx, actorType, height)
 			if err != nil {
-				return "", fmt.Errorf("failed to get actors at height: %w", err)
+				return "", fmt.Errorf("failed to get actors at height %d: %+v", height, err)
 			}
 
 			if err := t.updateActorsTree(actorType, actors); err != nil {
@@ -204,7 +208,9 @@ func (t *treeStore) getStateHash() string {
 	// create an order-matters list of roots
 	roots := make([][]byte, 0)
 	for tree := merkleTree(0); tree < numMerkleTrees; tree++ {
-		roots = append(roots, t.merkleTrees[tree].Root())
+		root := t.merkleTrees[tree].Root()
+		logger.Debug().Msgf("root: %s", root)
+		roots = append(roots, root)
 	}
 
 	// combine them and hash the result
@@ -213,7 +219,11 @@ func (t *treeStore) getStateHash() string {
 
 	// Convert the array to a slice and return it
 	// REF: https://stackoverflow.com/questions/28886616/convert-array-to-slice-in-go
-	return hex.EncodeToString(stateHash[:])
+	h := stateHash[:]
+
+	logger.Info().Msgf("#️⃣ calculated state hash: %s", h)
+
+	return hex.EncodeToString(h)
 }
 
 ////////////////////////

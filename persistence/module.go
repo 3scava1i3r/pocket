@@ -17,8 +17,7 @@ import (
 )
 
 var (
-	_ modules.PersistenceModule = &persistenceModule{}
-
+	_ modules.PersistenceModule    = &persistenceModule{}
 	_ modules.PersistenceRWContext = &PostgresContext{}
 )
 

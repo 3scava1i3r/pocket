@@ -19,6 +19,7 @@ import (
 	coreTypes "github.com/pokt-network/pocket/shared/core/types"
 	"github.com/pokt-network/pocket/shared/crypto"
 	"github.com/pokt-network/pocket/shared/modules"
+	"github.com/pokt-network/pocket/shared/modules/base_modules"
 	"github.com/pokt-network/smt"
 )
 
@@ -54,8 +55,7 @@ type merkleTree float64
 
 // A list of Merkle Trees used to maintain the state hash.
 const (
-	// IMPORTANT: The order in which these trees are defined is important and strict. It implicitly
-	// defines the index of the root hash each independent as they are concatenated together
+	// IMPORTANT: The order in which these trees are defined is important and strict. It implicitly // defines the index of the root hash each independent as they are concatenated together
 	// to generate the state hash.
 
 	// TECHDEBT: Enforce this ordering in protobufs using enums
@@ -79,13 +79,16 @@ const (
 	numMerkleTrees
 )
 
+// Ensure treeStore implements TreeStore
+var _ modules.TreeStoreModule = &treeStore{}
+
 // treeStore stores a set of merkle trees that
 // it manages. It fulfills the modules.TreeStore interface.
 // * It is responsible for atomic commit or rollback behavior
 // of the underlying trees by utilizing the lazy loading
 // functionality provided by the underlying smt library.
 type treeStore struct {
-	modules.Module
+	base_modules.IntegratableModule
 
 	treeStoreDir string
 	merkleTrees  map[merkleTree]*smt.SMT
@@ -96,28 +99,6 @@ type treeStore struct {
 // all of the trees in the treeStore for that height.
 func (t *treeStore) Update(pgtx pgx.Tx, txi indexer.TxIndexer, height uint64) (string, error) {
 	return t.updateMerkleTrees(pgtx, txi, height)
-}
-
-func NewStateTrees(treesStoreDir string) (*treeStore, error) {
-	if treesStoreDir == ":memory:" {
-		return newMemStateTrees()
-	}
-
-	stateTrees := &treeStore{
-		treeStoreDir: treesStoreDir,
-		merkleTrees:  make(map[merkleTree]*smt.SMT, int(numMerkleTrees)),
-		nodeStores:   make(map[merkleTree]kvstore.KVStore, int(numMerkleTrees)),
-	}
-
-	for tree := merkleTree(0); tree < numMerkleTrees; tree++ {
-		nodeStore, err := kvstore.NewKVStore(fmt.Sprintf("%s/%s_nodes", treesStoreDir, merkleTreeToString[tree]))
-		if err != nil {
-			return nil, err
-		}
-		stateTrees.nodeStores[tree] = nodeStore
-		stateTrees.merkleTrees[tree] = smt.NewSparseMerkleTree(nodeStore, sha256.New())
-	}
-	return stateTrees, nil
 }
 
 // DebugClearAll is used by the debug cli to completely reset all merkle trees.
@@ -132,20 +113,6 @@ func (t *treeStore) DebugClearAll() error {
 	}
 
 	return nil
-}
-
-// newMemStateTrees creates a new in-memory state tree
-func newMemStateTrees() (*treeStore, error) {
-	stateTrees := &treeStore{
-		merkleTrees: make(map[merkleTree]*smt.SMT, int(numMerkleTrees)),
-		nodeStores:  make(map[merkleTree]kvstore.KVStore, int(numMerkleTrees)),
-	}
-	for tree := merkleTree(0); tree < numMerkleTrees; tree++ {
-		nodeStore := kvstore.NewMemKVStore() // For testing, `smt.NewSimpleMap()` can be used as well
-		stateTrees.nodeStores[tree] = nodeStore
-		stateTrees.merkleTrees[tree] = smt.NewSparseMerkleTree(nodeStore, sha256.New())
-	}
-	return stateTrees, nil
 }
 
 // updateMerkleTrees updates all of the merkle trees that TreeStore manages.

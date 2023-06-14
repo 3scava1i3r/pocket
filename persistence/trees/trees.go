@@ -99,9 +99,33 @@ type treeStore struct {
 	nodeStores   map[merkleTree]kvstore.KVStore
 }
 
+func NewStateTrees(treesStoreDir string) (*treeStore, error) {
+	if treesStoreDir == ":memory:" {
+		return newMemStateTrees()
+	}
+
+	stateTrees := &treeStore{
+		treeStoreDir: treesStoreDir,
+		merkleTrees:  make(map[merkleTree]*smt.SMT, int(numMerkleTrees)),
+		nodeStores:   make(map[merkleTree]kvstore.KVStore, int(numMerkleTrees)),
+	}
+
+	for tree := merkleTree(0); tree < numMerkleTrees; tree++ {
+		nodeStore, err := kvstore.NewKVStore(fmt.Sprintf("%s/%s_nodes", treesStoreDir, merkleTreeToString[tree]))
+		if err != nil {
+			return nil, err
+		}
+		stateTrees.nodeStores[tree] = nodeStore
+		stateTrees.merkleTrees[tree] = smt.NewSparseMerkleTree(nodeStore, sha256.New())
+	}
+	logger.Info().Msgf("state tree initialized in %s", treesStoreDir)
+	return stateTrees, nil
+}
+
 // Update takes a transaction and a height and updates
 // all of the trees in the treeStore for that height.
 func (t *treeStore) Update(pgtx pgx.Tx, txi indexer.TxIndexer, height uint64) (string, error) {
+	logger.Info().Msgf("🌴 updating state trees at height %d", height)
 	return t.updateMerkleTrees(pgtx, txi, height)
 }
 

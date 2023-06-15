@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.0.0.58] - 2023-06-07
 
-- Adds a logger to Persistence
+- Adds a logger to TreeStore
 
 ## [0.0.0.57] - 2023-06-07
 

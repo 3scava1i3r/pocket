@@ -9,6 +9,9 @@ import (
 	"github.com/pokt-network/smt"
 )
 
+// ErrNoDirectory is thrown when no tree story storage directory is defined.
+var ErrNoDirectory = fmt.Errorf("tree store directory must be defined")
+
 func (*treeStore) Create(bus modules.Bus, options ...modules.TreeStoreOption) (modules.TreeStoreModule, error) {
 	m := &treeStore{}
 
@@ -41,6 +44,9 @@ func WithTreeStoreDirectory(path string) modules.TreeStoreOption {
 }
 
 func (t *treeStore) setupTrees() error {
+	if t.treeStoreDir == "" {
+		return ErrNoDirectory
+	}
 	if t.treeStoreDir == ":memory:" {
 		return t.setupInMemory()
 	}

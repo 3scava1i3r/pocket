@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	"github.com/pokt-network/pocket/persistence/indexer"
 	"github.com/pokt-network/pocket/persistence/kvstore"
 	"github.com/pokt-network/pocket/shared/modules"
 	"github.com/pokt-network/smt"
@@ -12,6 +13,7 @@ import (
 // ErrNoDirectory is thrown when no tree story storage directory is defined.
 var ErrNoDirectory = fmt.Errorf("tree store directory must be defined")
 
+// Create sets up treeStore as a module and applies options to it then returns it as a TreeStoreModule
 func (*treeStore) Create(bus modules.Bus, options ...modules.TreeStoreOption) (modules.TreeStoreModule, error) {
 	m := &treeStore{}
 
@@ -39,6 +41,15 @@ func WithTreeStoreDirectory(path string) modules.TreeStoreOption {
 		mod, ok := m.(*treeStore)
 		if ok {
 			mod.treeStoreDir = path
+		}
+	}
+}
+
+func WithTxIndexer(txi indexer.TxIndexer) modules.TreeStoreOption {
+	return func(m modules.TreeStoreModule) {
+		mod, ok := m.(*treeStore)
+		if ok {
+			mod.txi = txi
 		}
 	}
 }

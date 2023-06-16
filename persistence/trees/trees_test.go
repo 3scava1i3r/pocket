@@ -1,52 +1,79 @@
 package trees_test
 
 import (
+	"encoding/hex"
 	"fmt"
+	"log"
+	"math/big"
 	"testing"
 
 	"github.com/golang/mock/gomock"
-	"github.com/stretchr/testify/assert"
-
-	"github.com/pokt-network/pocket/internal/testutil"
 	"github.com/pokt-network/pocket/p2p/providers/current_height_provider"
 	"github.com/pokt-network/pocket/p2p/providers/peerstore_provider"
-	"github.com/pokt-network/pocket/persistence/trees"
+	"github.com/pokt-network/pocket/persistence"
 	"github.com/pokt-network/pocket/runtime"
-	"github.com/pokt-network/pocket/runtime/genesis"
+	"github.com/pokt-network/pocket/runtime/configs"
 	"github.com/pokt-network/pocket/runtime/test_artifacts"
+	"github.com/pokt-network/pocket/runtime/test_artifacts/keygen"
 	coreTypes "github.com/pokt-network/pocket/shared/core/types"
-	cryptoPocket "github.com/pokt-network/pocket/shared/crypto"
+	"github.com/pokt-network/pocket/shared/crypto"
+	"github.com/pokt-network/pocket/shared/messaging"
 	"github.com/pokt-network/pocket/shared/modules"
 	mockModules "github.com/pokt-network/pocket/shared/modules/mocks"
+	"github.com/pokt-network/pocket/shared/utils"
+	"github.com/stretchr/testify/assert"
 )
 
-const (
-	serviceURLFormat = "node%d.consensus:42069"
+var (
+	DefaultChains     = []string{"0001"}
+	ChainsToUpdate    = []string{"0002"}
+	DefaultServiceURL = "https://foo.bar"
+	DefaultPoolName   = "TESTING_POOL"
+
+	DefaultDeltaBig   = big.NewInt(100)
+	DefaultAccountBig = big.NewInt(1000000)
+	DefaultStakeBig   = big.NewInt(1000000000000000)
+
+	DefaultAccountAmount = utils.BigIntToString(DefaultAccountBig)
+	DefaultStake         = utils.BigIntToString(DefaultStakeBig)
+	StakeToUpdate        = utils.BigIntToString((&big.Int{}).Add(DefaultStakeBig, DefaultDeltaBig))
+
+	DefaultStakeStatus     = int32(coreTypes.StakeStatus_Staked)
+	DefaultPauseHeight     = int64(-1) // pauseHeight=-1 implies not paused
+	DefaultUnstakingHeight = int64(-1) // unstakingHeight=-1 implies not unstaking
+
+	OlshanskyURL    = "https://olshansky.info"
+	OlshanskyChains = []string{"OLSH"}
+
+	testSchema = "test_schema"
+
+	genesisStateNumValidators   = 5
+	genesisStateNumServicers    = 1
+	genesisStateNumApplications = 1
 )
 
-func TestTreeStore_Update(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	mockRuntimeMgr := mockModules.NewMockRuntimeMgr(ctrl)
-	mockBus := createMockBus(t, mockRuntimeMgr)
+func TestUpdate(t *testing.T) {
+	pool, resource, dbUrl := test_artifacts.SetupPostgresDocker()
+	t.Cleanup(func() {
+		if err := pool.Purge(resource); err != nil {
+			log.Fatalf("could not purge resource: %s", err)
+		}
+	})
 
-	genesisStateMock := createMockGenesisState(nil)
-	persistenceMock := preparePersistenceMock(t, mockBus, genesisStateMock)
-	mockBus.EXPECT().GetPersistenceModule().Return(persistenceMock).AnyTimes()
+	pmod := newTestPersistenceModule(t, dbUrl)
+	context := NewTestPostgresContext(t, 0, pmod)
 
-	treemod, err := trees.Create(mockBus, trees.WithTreeStoreDirectory(":memory:"))
-	assert.NoError(t, err)
-	t.Logf("treemod %+v", treemod)
+	t.Run("should update actor tree and commit", func(t *testing.T) {
+		actor, err := createAndInsertDefaultTestApp(context)
+		assert.NoError(t, err)
+		t.Logf("actor inserted %+v", actor)
+		hash, err := context.ComputeStateHash()
+		assert.NoError(t, err)
+		t.Logf("hash: %+v", hash)
+	})
 }
 
-func TestTreeStore_Create(t *testing.T) {
-	t.Skip("TODO: Write test case for DebugClearAll method")
-}
-
-func TestTreeStore_DebugClearAll(t *testing.T) {
-	// TODO: Write test case for the DebugClearAll method
-	t.Skip("TODO: Write test case for DebugClearAll method")
-}
-
+// createMockBus returns a mock bus with stubbed out functions for bus registration
 func createMockBus(t *testing.T, runtimeMgr modules.RuntimeMgr) *mockModules.MockBus {
 	ctrl := gomock.NewController(t)
 	mockBus := mockModules.NewMockBus(ctrl)
@@ -62,56 +89,177 @@ func createMockBus(t *testing.T, runtimeMgr modules.RuntimeMgr) *mockModules.Moc
 	return mockBus
 }
 
-// createMockGenesisState configures and returns a mocked GenesisState
-func createMockGenesisState(valKeys []cryptoPocket.PrivateKey) *genesis.GenesisState {
-	genesisState := new(genesis.GenesisState)
-	validators := make([]*coreTypes.Actor, len(valKeys))
-	for i, valKey := range valKeys {
-		addr := valKey.Address().String()
-		mockActor := &coreTypes.Actor{
-			ActorType:       coreTypes.ActorType_ACTOR_TYPE_VAL,
-			Address:         addr,
-			PublicKey:       valKey.PublicKey().String(),
-			ServiceUrl:      validatorId(i + 1),
-			StakedAmount:    test_artifacts.DefaultStakeAmountString,
-			PausedHeight:    int64(0),
-			UnstakingHeight: int64(0),
-			Output:          addr,
-		}
-		validators[i] = mockActor
+func newTestPersistenceModule(t *testing.T, databaseUrl string) modules.PersistenceModule {
+	teardownDeterministicKeygen := keygen.GetInstance().SetSeed(42)
+	defer teardownDeterministicKeygen()
+
+	cfg := &configs.Config{
+		Persistence: &configs.PersistenceConfig{
+			PostgresUrl:       databaseUrl,
+			NodeSchema:        testSchema,
+			BlockStorePath:    ":memory:",
+			TxIndexerPath:     ":memory:",
+			TreesStoreDir:     ":memory:",
+			MaxConnsCount:     5,
+			MinConnsCount:     1,
+			MaxConnLifetime:   "5m",
+			MaxConnIdleTime:   "1m",
+			HealthCheckPeriod: "30s",
+		},
 	}
-	genesisState.Validators = validators
 
-	return genesisState
+	genesisState, _ := test_artifacts.NewGenesisState(
+		genesisStateNumValidators,
+		genesisStateNumServicers,
+		genesisStateNumApplications,
+		genesisStateNumServicers,
+	)
+
+	runtimeMgr := runtime.NewManager(cfg, genesisState)
+
+	bus, err := runtime.CreateBus(runtimeMgr)
+	assert.NoError(t, err)
+
+	// txi, err := indexer.NewMemTxIndexer()
+	// assert.NoError(t, err)
+
+	// ts, err := trees.Create(
+	// 	bus,
+	// 	trees.WithTreeStoreDirectory(":memory:"),
+	// 	trees.WithTxIndexer(txi))
+	// assert.NoError(t, err)
+
+	persistenceMod, err := persistence.Create(bus)
+	assert.NoError(t, err)
+
+	fmt.Printf("bus.GetPersistenceModule().GetTxIndexer(): %v\n", bus.GetPersistenceModule().GetTxIndexer())
+	// fmt.Printf("ts: %v\n", ts)
+
+	return persistenceMod.(modules.PersistenceModule)
+}
+func createAndInsertDefaultTestApp(db *persistence.PostgresContext) (*coreTypes.Actor, error) {
+	app, err := newTestApp()
+	if err != nil {
+		return nil, err
+	}
+	// TODO(andrew): Avoid the use of `log.Fatal(fmt.Sprintf`
+	// TODO(andrew): Use `require.NoError` instead of `log.Fatal` in tests`
+	addrBz, err := hex.DecodeString(app.Address)
+	if err != nil {
+		log.Fatalf("an error occurred converting address to bytes %s", app.Address)
+	}
+	pubKeyBz, err := hex.DecodeString(app.PublicKey)
+	if err != nil {
+		log.Fatalf("an error occurred converting pubKey to bytes %s", app.PublicKey)
+	}
+	outputBz, err := hex.DecodeString(app.Output)
+	if err != nil {
+		log.Fatalf("an error occurred converting output to bytes %s", app.Output)
+	}
+	return app, db.InsertApp(
+		addrBz,
+		pubKeyBz,
+		outputBz,
+		false,
+		DefaultStakeStatus,
+		DefaultStake,
+		DefaultChains,
+		DefaultPauseHeight,
+		DefaultUnstakingHeight)
 }
 
-// Persistence mock - only needed for validatorMap access
-func preparePersistenceMock(t *testing.T, busMock *mockModules.MockBus, genesisState *genesis.GenesisState) *mockModules.MockPersistenceModule {
-	ctrl := gomock.NewController(t)
+func newTestApp() (*coreTypes.Actor, error) {
+	operatorKey, err := crypto.GeneratePublicKey()
+	if err != nil {
+		return nil, err
+	}
 
-	persistenceModuleMock := mockModules.NewMockPersistenceModule(ctrl)
-	readCtxMock := mockModules.NewMockPersistenceReadContext(ctrl)
+	outputAddr, err := crypto.GenerateAddress()
+	if err != nil {
+		return nil, err
+	}
 
-	readCtxMock.EXPECT().GetAllValidators(gomock.Any()).Return(genesisState.GetValidators(), nil).AnyTimes()
-	readCtxMock.EXPECT().GetAllStakedActors(gomock.Any()).DoAndReturn(func(height int64) ([]*coreTypes.Actor, error) {
-		return testutil.Concatenate[*coreTypes.Actor](
-			genesisState.GetValidators(),
-			genesisState.GetServicers(),
-			genesisState.GetFishermen(),
-			genesisState.GetApplications(),
-		), nil
-	}).AnyTimes()
-	persistenceModuleMock.EXPECT().NewReadContext(gomock.Any()).Return(readCtxMock, nil).AnyTimes()
-	readCtxMock.EXPECT().Release().AnyTimes()
-
-	persistenceModuleMock.EXPECT().GetBus().Return(busMock).AnyTimes()
-	persistenceModuleMock.EXPECT().SetBus(busMock).AnyTimes()
-	persistenceModuleMock.EXPECT().GetModuleName().Return(modules.PersistenceModuleName).AnyTimes()
-	busMock.RegisterModule(persistenceModuleMock)
-
-	return persistenceModuleMock
+	return &coreTypes.Actor{
+		Address:         hex.EncodeToString(operatorKey.Address()),
+		PublicKey:       hex.EncodeToString(operatorKey.Bytes()),
+		Chains:          DefaultChains,
+		StakedAmount:    DefaultStake,
+		PausedHeight:    DefaultPauseHeight,
+		UnstakingHeight: DefaultUnstakingHeight,
+		Output:          hex.EncodeToString(outputAddr),
+	}, nil
 }
 
-func validatorId(i int) string {
-	return fmt.Sprintf(serviceURLFormat, i)
+func NewTestPostgresContext(t testing.TB, height int64, testPersistenceMod modules.PersistenceModule) *persistence.PostgresContext {
+	rwCtx, err := testPersistenceMod.NewRWContext(height)
+	if err != nil {
+		log.Fatalf("Error creating new context: %v\n", err)
+	}
+
+	postgresCtx, ok := rwCtx.(*persistence.PostgresContext)
+	if !ok {
+		log.Fatalf("Error casting RW context to Postgres context")
+	}
+
+	// TECHDEBT: This should not be part of `NewTestPostgresContext`. It causes unnecessary resets
+	// if we call `NewTestPostgresContext` more than once in a single test.
+	t.Cleanup(func() {
+		resetStateToGenesis(testPersistenceMod)
+	})
+
+	return postgresCtx
+}
+
+func NewTestPersistenceModule(t *testing.T, databaseUrl string) modules.PersistenceModule {
+	teardownDeterministicKeygen := keygen.GetInstance().SetSeed(42)
+	defer teardownDeterministicKeygen()
+
+	cfg := &configs.Config{
+		Persistence: &configs.PersistenceConfig{
+			PostgresUrl:       databaseUrl,
+			NodeSchema:        testSchema,
+			BlockStorePath:    ":memory:",
+			TxIndexerPath:     ":memory:",
+			TreesStoreDir:     ":memory:",
+			MaxConnsCount:     5,
+			MinConnsCount:     1,
+			MaxConnLifetime:   "5m",
+			MaxConnIdleTime:   "1m",
+			HealthCheckPeriod: "30s",
+		},
+	}
+
+	genesisState, _ := test_artifacts.NewGenesisState(
+		genesisStateNumValidators,
+		genesisStateNumServicers,
+		genesisStateNumApplications,
+		genesisStateNumServicers,
+	)
+	runtimeMgr := runtime.NewManager(cfg, genesisState)
+	bus, err := runtime.CreateBus(runtimeMgr)
+	if err != nil {
+		log.Printf("Error creating bus: %s", err)
+		return nil
+	}
+
+	persistenceMod, err := persistence.Create(bus)
+	if err != nil {
+		log.Printf("Error creating persistence module: %s", err)
+		return nil
+	}
+
+	return persistenceMod.(modules.PersistenceModule)
+}
+
+// This is necessary for unit tests that are dependant on a baseline genesis state
+func resetStateToGenesis(m modules.PersistenceModule) {
+	if err := m.ReleaseWriteContext(); err != nil {
+		log.Fatalf("Error releasing write context: %v\n", err)
+	}
+	if err := m.HandleDebugMessage(&messaging.DebugMessage{
+		Action:  messaging.DebugMessageAction_DEBUG_PERSISTENCE_RESET_TO_GENESIS,
+		Message: nil,
+	}); err != nil {
+		log.Fatalf("Error clearing state: %v\n", err)
+	}
 }

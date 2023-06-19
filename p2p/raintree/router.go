@@ -55,6 +55,7 @@ func NewRainTreeRouter(bus modules.Bus, cfg *config.RainTreeConfig) (typesP2P.Ro
 }
 
 func (*rainTreeRouter) Create(bus modules.Bus, cfg *config.RainTreeConfig) (typesP2P.Router, error) {
+	// TODO_THIS_COMMIT: rename logger to support multiple routers
 	routerLogger := logger.Global.CreateLoggerForModule("router")
 	routerLogger.Info().Msg("Initializing rainTreeRouter")
 
@@ -152,15 +153,14 @@ func (rtr *rainTreeRouter) sendInternal(data []byte, address cryptoPocket.Addres
 
 	peer := rtr.peersManager.GetPeerstore().GetPeer(address)
 	if peer == nil {
-		return fmt.Errorf("no known peer with pokt address %s", address)
+		return fmt.Errorf("%w: with pokt address %s", typesP2P.ErrUnknownPeer, address)
 	}
 
 	// debug logging
 	hostname := rtr.getHostname()
 	utils.LogOutgoingMsg(rtr.logger, hostname, peer)
 
-	if err := utils.Libp2pSendToPeer(rtr.host, data, peer); err != nil {
-		rtr.logger.Debug().Err(err).Msg("from libp2pSendInternal")
+	if err := utils.Libp2pSendToPeer(rtr.host, protocol.RaintreeProtocolID, data, peer); err != nil {
 		return err
 	}
 
